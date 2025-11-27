@@ -1,9 +1,97 @@
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
+
+interface LoadCurveData {
+  timestamp: Date;
+  value: number;
+}
+
+function parseCSV(content: string): LoadCurveData[] {
+  const lines = content.trim().split('\n');
+  const data: LoadCurveData[] = [];
+  
+  // Skip header
+  for (let i = 1; i < lines.length; i++) {
+    const [timestamp, value] = lines[i].split(',');
+    if (timestamp && value) {
+      data.push({
+        timestamp: new Date(timestamp),
+        value: parseFloat(value)
+      });
+    }
+  }
+  
+  return data;
+}
+
+function analyzeLoadCurve(data: LoadCurveData[]) {
+  if (data.length === 0) {
+    throw new Error('No data to analyze');
+  }
+
+  // Calculate total annual consumption (sum of all values)
+  const totalConsumption = data.reduce((sum, d) => sum + d.value, 0);
+  
+  // Calculate average daily consumption
+  const firstDate = data[0].timestamp;
+  const lastDate = data[data.length - 1].timestamp;
+  const daysDiff = (lastDate.getTime() - firstDate.getTime()) / (1000 * 60 * 60 * 24);
+  const avgDailyConsumption = totalConsumption / daysDiff;
+  
+  // Find peak load
+  const peakLoad = Math.max(...data.map(d => d.value));
+  
+  // Time-of-day consumption splits
+  const timeSlots = {
+    night: 0,      // 00-06h
+    morning: 0,    // 06-12h
+    afternoon: 0,  // 12-18h
+    evening: 0     // 18-24h
+  };
+  
+  data.forEach(d => {
+    const hour = d.timestamp.getHours();
+    if (hour >= 0 && hour < 6) timeSlots.night += d.value;
+    else if (hour >= 6 && hour < 12) timeSlots.morning += d.value;
+    else if (hour >= 12 && hour < 18) timeSlots.afternoon += d.value;
+    else timeSlots.evening += d.value;
+  });
+  
+  // Convert to percentages
+  const timeSlotPercentages = {
+    night: (timeSlots.night / totalConsumption) * 100,
+    morning: (timeSlots.morning / totalConsumption) * 100,
+    afternoon: (timeSlots.afternoon / totalConsumption) * 100,
+    evening: (timeSlots.evening / totalConsumption) * 100
+  };
+  
+  // Determine consumption pattern
+  let pattern = 'mixed';
+  const max = Math.max(...Object.values(timeSlotPercentages));
+  if (timeSlotPercentages.afternoon === max && timeSlotPercentages.afternoon > 35) {
+    pattern = 'daytime-driven';
+  } else if (timeSlotPercentages.evening === max && timeSlotPercentages.evening > 35) {
+    pattern = 'evening-driven';
+  } else if (timeSlotPercentages.night === max && timeSlotPercentages.night > 30) {
+    pattern = 'night-driven';
+  }
+  
+  return {
+    totalConsumption: totalConsumption.toFixed(2),
+    avgDailyConsumption: avgDailyConsumption.toFixed(2),
+    peakLoad: peakLoad.toFixed(4),
+    timeOfDay: {
+      night_00_06h: timeSlotPercentages.night.toFixed(1) + '%',
+      morning_06_12h: timeSlotPercentages.morning.toFixed(1) + '%',
+      afternoon_12_18h: timeSlotPercentages.afternoon.toFixed(1) + '%',
+      evening_18_24h: timeSlotPercentages.evening.toFixed(1) + '%'
+    },
+    pattern,
+    dataPoints: data.length
+  };
+}
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -20,6 +108,14 @@ Deno.serve(async (req) => {
       );
     }
 
+    console.log('Parsing CSV data...');
+    const data = parseCSV(fileContent);
+    console.log(`Parsed ${data.length} data points`);
+    
+    console.log('Analyzing load curve...');
+    const analysis = analyzeLoadCurve(data);
+    console.log('Analysis complete:', analysis);
+
     const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
     if (!LOVABLE_API_KEY) {
       console.error('LOVABLE_API_KEY is not configured');
@@ -29,29 +125,27 @@ Deno.serve(async (req) => {
       );
     }
 
-    const prompt = `I am uploading a file containing a 15-minute load curve (timestamp + consumption values).
-Please perform the following steps:
+    const prompt = `Based on the following load curve analysis, determine the optimal investment mix for renewable energy:
 
-1. Load Curve Analysis
-- Read the file fully (CSV, header assumed).
-- Compute:
-  * Total annual consumption
-  * Average daily consumption
-  * Peak load
-  * Time-of-day consumption split (00–06h, 06–12h, 12–18h, 18–24h)
-- Identify whether consumption is primarily daytime-driven, evening-driven, night-driven, or mixed.
+Load Curve Analysis:
+- Total Annual Consumption: ${analysis.totalConsumption} kWh
+- Average Daily Consumption: ${analysis.avgDailyConsumption} kWh
+- Peak Load: ${analysis.peakLoad} kW
+- Time-of-Day Breakdown:
+  * Night (00-06h): ${analysis.timeOfDay.night_00_06h}
+  * Morning (06-12h): ${analysis.timeOfDay.morning_06_12h}
+  * Afternoon (12-18h): ${analysis.timeOfDay.afternoon_12_18h}
+  * Evening (18-24h): ${analysis.timeOfDay.evening_18_24h}
+- Consumption Pattern: ${analysis.pattern}
+- Data Points Analyzed: ${analysis.dataPoints}
 
-2. Investment Mix Logic
-Based on the load behaviour, determine:
-- Recommended share of PV (should match or slightly exceed daytime demand; can include surplus to charge battery).
-- Recommended share of wind (to cover night & winter needs and diversify seasonal risk).
-- Recommended battery storage share (sized as % of daily energy to cover evening peaks and load shifting needs).
+Based on this analysis:
+1. Recommend the optimal share of PV (solar) - should align with daytime consumption patterns
+2. Recommend the optimal share of Wind - to cover night/winter needs and diversify
+3. Recommend the optimal share of Battery Storage - to handle peak evening loads and enable load shifting
 
-3. Final Output
-Provide a single recommended percentage for each investment category (not ranges) based on your analysis.
+Provide THREE single percentage numbers that sum to 100. Format your response EXACTLY as:
 
-4. Deliver in JSON
-Format the final answer exactly as:
 {
   "recommended_mix": {
     "PV": <number>,
@@ -60,11 +154,9 @@ Format the final answer exactly as:
   }
 }
 
-Here is the CSV data:
+No explanation, just the JSON.`;
 
-${fileContent}`;
-
-    console.log('Calling Lovable AI Gateway...');
+    console.log('Calling Lovable AI Gateway with summary...');
     
     const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
       method: 'POST',
@@ -107,10 +199,10 @@ ${fileContent}`;
       );
     }
 
-    const data = await response.json();
+    const aiData = await response.json();
     console.log('AI Gateway response received');
     
-    const aiResponse = data.choices?.[0]?.message?.content;
+    const aiResponse = aiData.choices?.[0]?.message?.content;
     
     if (!aiResponse) {
       console.error('No content in AI response');
@@ -131,10 +223,13 @@ ${fileContent}`;
     }
 
     const result = JSON.parse(jsonMatch[0]);
-    console.log('Analysis complete:', result);
+    console.log('Final recommendation:', result);
 
     return new Response(
-      JSON.stringify({ result }),
+      JSON.stringify({ 
+        result,
+        analysis // Include the analysis for reference
+      }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
