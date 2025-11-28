@@ -1,9 +1,11 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { FileUpload } from "@/components/FileUpload";
 import { ResultsDisplay } from "@/components/ResultsDisplay";
 import { useToast } from "@/hooks/use-toast";
-import { Zap } from "lucide-react";
+import { Zap, TrendingUp } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 const Index = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -47,6 +49,15 @@ const Index = () => {
   return (
     <div className="min-h-screen bg-background">
       <div className="container max-w-4xl mx-auto px-4 py-12">
+        <div className="flex justify-end mb-6">
+          <Button asChild variant="outline">
+            <Link to="/marketplace" className="flex items-center gap-2">
+              <TrendingUp className="h-4 w-4" />
+              Go to Marketplace
+            </Link>
+          </Button>
+        </div>
+        
         <div className="text-center mb-12">
           <div className="flex items-center justify-center gap-3 mb-4">
             <div className="p-3 bg-primary/10 rounded-full">
