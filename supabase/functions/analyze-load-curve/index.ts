@@ -144,7 +144,9 @@ Based on this analysis:
 2. Recommend the optimal share of Wind - to cover night/winter needs and diversify
 3. Recommend the optimal share of Battery Storage - to handle peak evening loads and enable load shifting
 
-Provide THREE single percentage numbers that sum to 100. Format your response EXACTLY as:
+CRITICAL: Provide THREE single percentage numbers that sum to 100. Do NOT provide ranges. If you consider a range, always return the MINIMUM value from that range.
+
+Format your response EXACTLY as:
 
 {
   "recommended_mix": {
